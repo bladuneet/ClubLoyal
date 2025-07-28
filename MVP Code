@@ -1,8 +1,18 @@
-Folder Structure (GitHub-ready)
-pgsql
-Copy
-Edit
-bulk-distributor-mvp/
+MVP Tech Stack
+Backend: Django + Django REST Framework
+
+Frontend: React
+
+Database: PostgreSQL (or SQLite for MVP)
+
+Authentication: JWT-based
+
+Payment (Mock): Stripe API structure (can be extended to crypto)
+
+📁 Folder Structure
+cpp
+
+clubloyal-mvp/
 ├── backend/
 │   ├── manage.py
 │   ├── requirements.txt
@@ -10,182 +20,188 @@ bulk-distributor-mvp/
 │   │   ├── models.py
 │   │   ├── views.py
 │   │   ├── urls.py
-│   │   ├── admin.py
-│   │   └── tasks.py
-│   └── bulk_distributor/
+│   │   ├── serializers.py
+│   │   └── analytics.py
+│   └── clubloyal/
 │       ├── settings.py
 │       └── urls.py
 ├── frontend/
 │   ├── public/
 │   └── src/
 │       ├── App.js
-│       ├── components/
 │       ├── pages/
-│       └── utils/
+│       ├── components/
+│       └── services/
 └── README.md
-🔧 Backend Highlights (Django)
+
+
+✅ Backend Highlights
 models.py
 python
-Copy
-Edit
+
 from django.db import models
+from django.contrib.auth.models import AbstractUser
 
-class User(models.Model):
-    ROLE_CHOICES = [
-        ('admin', 'Administrator'),
-        ('org_admin', 'Organization Admin'),
-        ('recipient', 'Recipient')
-    ]
-    name = models.CharField(max_length=100)
-    phone = models.CharField(max_length=15, blank=True)
-    email = models.EmailField(unique=True)
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES)
-    organization = models.ForeignKey('Organization', on_delete=models.SET_NULL, null=True, blank=True)
+class User(AbstractUser):
+    tier = models.CharField(max_length=50, default="Bronze")  # Bronze, Silver, Gold
 
-class Organization(models.Model):
-    name = models.CharField(max_length=100)
-    wallet_balance = models.DecimalField(max_digits=10, decimal_places=2)
-
-class RecipientGroup(models.Model):
-    name = models.CharField(max_length=100)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
-
-class Recipient(models.Model):
-    name = models.CharField(max_length=100)
-    phone = models.CharField(max_length=15)
-    group = models.ForeignKey(RecipientGroup, on_delete=models.CASCADE, null=True)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
-
-class BundleDistribution(models.Model):
-    BUNDLE_CHOICES = [
-        ('100MB', '100MB'), ('500MB', '500MB'), ('1GB', '1GB')
-    ]
-    recipient = models.ForeignKey(Recipient, on_delete=models.CASCADE)
-    bundle_type = models.CharField(max_length=10, choices=BUNDLE_CHOICES)
-    status = models.CharField(max_length=20, default='pending')
-    created_at = models.DateTimeField(auto_now_add=True)
-
-class AuditTrail(models.Model):
-    action = models.TextField()
-    performed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+class LoyaltyTransaction(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    activity = models.CharField(max_length=100)  # e.g., "ticket purchase"
+    points = models.IntegerField()
     timestamp = models.DateTimeField(auto_now_add=True)
-views.py (key API endpoints)
+
+class Wallet(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    balance = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    team_tokens = models.IntegerField(default=0)
+
+class Purchase(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    item = models.CharField(max_length=100)
+    cost = models.DecimalField(max_digits=10, decimal_places=2)
+    used_points = models.IntegerField(default=0)
+    paid_with = models.CharField(max_length=20, default="credit_card")  # or tokens
+views.py (Sample Endpoints)
 python
-Copy
-Edit
-from rest_framework.decorators import api_view
+
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from .models import Recipient, BundleDistribution
-import csv
-
-@api_view(['POST'])
-def import_csv(request):
-    file = request.FILES['file']
-    decoded_file = file.read().decode('utf-8').splitlines()
-    reader = csv.DictReader(decoded_file)
-    for row in reader:
-        Recipient.objects.create(
-            name=row['name'], phone=row['phone'], organization=request.user.organization
-        )
-    return Response({'message': 'Recipients imported successfully'})
-
-@api_view(['POST'])
-def distribute_bundle(request):
-    data = request.data
-    for recipient_id, bundle in data['bundles'].items():
-        recipient = Recipient.objects.get(id=recipient_id)
-        BundleDistribution.objects.create(recipient=recipient, bundle_type=bundle)
-    return Response({'message': 'Distribution started'})
+from .models import LoyaltyTransaction, Wallet, Purchase
+from rest_framework.permissions import IsAuthenticated
 
 @api_view(['GET'])
-def get_dashboard_stats(request):
-    total = BundleDistribution.objects.count()
-    success = BundleDistribution.objects.filter(status='success').count()
-    return Response({'total': total, 'success': success})
-📅 Scheduling with Celery (tasks.py)
-python
-Copy
-Edit
-from celery import shared_task
-from .models import BundleDistribution
+@permission_classes([IsAuthenticated])
+def wallet_view(request):
+    wallet, _ = Wallet.objects.get_or_create(user=request.user)
+    return Response({
+        "balance": wallet.balance,
+        "team_tokens": wallet.team_tokens
+    })
 
-@shared_task
-def process_scheduled_distribution():
-    pending = BundleDistribution.objects.filter(status='pending')
-    for dist in pending:
-        # Simulate success
-        dist.status = 'success'
-        dist.save()
-💳 Payment API (Mock)
-views.py (Add wallet top-up)
-python
-Copy
-Edit
 @api_view(['POST'])
-def mobile_money_payment(request):
-    org = request.user.organization
-    amount = float(request.data['amount'])
-    org.wallet_balance += amount
-    org.save()
-    return Response({'message': 'Wallet funded successfully'})
-📊 React Frontend Key Features
-Upload CSV
+@permission_classes([IsAuthenticated])
+def add_loyalty_points(request):
+    activity = request.data.get("activity")
+    points = int(request.data.get("points", 0))
+    LoyaltyTransaction.objects.create(user=request.user, activity=activity, points=points)
+    return Response({"message": f"{points} points added for {activity}."})
 
-Select recipients/groups and assign bundle types
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def make_purchase(request):
+    item = request.data.get("item")
+    cost = float(request.data.get("cost"))
+    use_points = int(request.data.get("use_points", 0))
+    wallet, _ = Wallet.objects.get_or_create(user=request.user)
+    if wallet.balance < cost:
+        return Response({"error": "Insufficient balance"}, status=400)
+    wallet.balance -= cost
+    wallet.save()
+    Purchase.objects.create(user=request.user, item=item, cost=cost, used_points=use_points)
+    return Response({"message": "Purchase successful"})
+analytics.py (Fan Behavior & Prediction)
+python
 
-Schedule distributions (simple form)
+from .models import LoyaltyTransaction
+from django.db.models import Sum
+from datetime import timedelta
+from django.utils import timezone
 
-View reporting dashboard
+def get_loyal_user_rankings():
+    last_30_days = timezone.now() - timedelta(days=30)
+    return LoyaltyTransaction.objects.filter(timestamp__gte=last_30_days) \
+        .values('user__username') \
+        .annotate(total_points=Sum('points')) \
+        .order_by('-total_points')
+serializers.py
+python
 
-Role-based navigation (Admin, Org Admin, Recipient)
+from rest_framework import serializers
+from .models import LoyaltyTransaction, Wallet, Purchase
 
+class LoyaltyTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoyaltyTransaction
+        fields = '__all__'
+
+class WalletSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Wallet
+        fields = '__all__'
+
+class PurchaseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Purchase
+        fields = '__all__'
+🖥️ Frontend (React)
+/pages/Dashboard.js
+jsx
+
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
+
+const Dashboard = () => {
+  const [wallet, setWallet] = useState({});
+
+  useEffect(() => {
+    axios.get('/api/wallet/', {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+    }).then(res => setWallet(res.data));
+  }, []);
+
+  return (
+    <div>
+      <h2>Wallet</h2>
+      <p>Balance: ${wallet.balance}</p>
+      <p>Team Tokens: {wallet.team_tokens}</p>
+    </div>
+  );
+};
+
+export default Dashboard;
 📦 requirements.txt
 txt
-Copy
-Edit
+
 Django>=4.2
 djangorestframework
-celery
-django-cors-headers
-gunicorn
-🚀 GitHub README.md Sample
-markdown
-Copy
-Edit
-# Bulk Distributor MVP
+djangorestframework-simplejwt
+psycopg2
+🚀 GitHub README.md
+md
 
-## Supports:
-- NGOs, Governments, Enterprises, Campaigns
-- Bulk Internet Bundles, Mobile Money, and Airtime
+# ClubLoyal MVP
+
+## What is it?
+A sports loyalty platform with digital wallet features designed for fan engagement and stadium sales.
 
 ## Features
-- 📥 CSV Import of Phone Numbers
-- 💳 MoMo Wallet & Transactions (Mock)
-- 📅 Recurring Distribution Scheduling
-- 📊 Dashboard with Stats
-- 🔐 Role-Based Access: Admin, Org Admin, Recipient
-
-## Tech Stack
-- Django REST Framework + Celery
-- React.js (Frontend)
+- 🏆 Customizable loyalty rewards
+- 💳 In-app wallet (USD & team tokens)
+- 📈 Fan analytics dashboard
+- 🌐 Web + Kiosk + Mobile-ready APIs
 
 ## Setup
+
 1. Backend
 ```bash
 cd backend
 pip install -r requirements.txt
 python manage.py migrate
+python manage.py createsuperuser
 python manage.py runserver
 Frontend
 
 bash
-Copy
-Edit
+
 cd frontend
 npm install
 npm start
-yaml
-Copy
-Edit
+Roadmap
+NFT Ticketing (Next)
 
----
+Crypto Wallet Integration
+
+AR-based Stadium Games
+
+yaml
